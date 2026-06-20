@@ -118,14 +118,17 @@ function renderAchievementWall(): void {
 
     if (rec?.completed) {
       const bestTime = rec.bestTime ?? rec.timeSpent;
+      const minErrors = rec.minErrorCount ?? rec.errorCount;
+      const everNoHint = rec.everNoHint ?? !rec.usedHint;
+      const everFast = rec.everFast ?? bestTime <= 45;
       card.innerHTML = `
         <div class="record-level-name">${LEVEL_NAMES[i] || `关卡 ${i}`}</div>
         <div class="record-status completed">✅ 已完成</div>
         <div class="record-detail">
-          最佳用时: ${formatTime(bestTime)}<br>
-          上次用时: ${formatTime(rec.timeSpent)}<br>
-          最少错误: ${rec.errorCount}次<br>
-          ${rec.usedHint ? '使用了提示' : '💪 无提示通关'}
+          🏆 最佳用时: ${formatTime(bestTime)}<br>
+          💎 最少错误: ${minErrors}次<br>
+          ${everNoHint ? '👁️ 曾无提示通关' : '📊 尚未无提示通关'}<br>
+          ${everFast ? '⚡ 曾快速通关' : '⏱️ 尚未快速通关'}
         </div>
       `;
     } else {
@@ -271,8 +274,9 @@ btnUndo.addEventListener('click', () => {
 });
 
 btnReset.addEventListener('click', () => {
-  if (confirm('确定要重置本关吗？所有连线将被清除，统计数据也会重置。')) {
+  if (confirm('确定要重置本关吗？所有连线将被清除，本次统计数据也会重置。')) {
     game.resetLevel();
+    btnHint.textContent = '显示频率';
   }
 });
 

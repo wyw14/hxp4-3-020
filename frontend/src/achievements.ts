@@ -5,7 +5,7 @@ import type {
   AchievementStore
 } from './types';
 
-const STORAGE_KEY = 'starmyth_achievements_v1';
+const STORAGE_KEY = 'starmyth_achievements_v2';
 const TOTAL_LEVELS = 3;
 const FAST_COMPLETE_THRESHOLD = 45;
 
@@ -80,6 +80,19 @@ export function getBadgeDefinitions(): BadgeDefinition[] {
   return BADGE_DEFINITIONS;
 }
 
+function createDefaultLevelRecord(): LevelRecord {
+  return {
+    completed: false,
+    timeSpent: 0,
+    errorCount: 0,
+    usedHint: false,
+    bestTime: undefined,
+    minErrorCount: undefined,
+    everNoHint: false,
+    everFast: false
+  };
+}
+
 function createDefaultStore(): AchievementStore {
   const badges: Record<string, BadgeProgress> = {};
   for (const def of BADGE_DEFINITIONS) {
@@ -87,12 +100,7 @@ function createDefaultStore(): AchievementStore {
   }
   const levels: Record<number, LevelRecord> = {};
   for (let i = 1; i <= TOTAL_LEVELS; i++) {
-    levels[i] = {
-      completed: false,
-      timeSpent: 0,
-      errorCount: 0,
-      usedHint: false
-    };
+    levels[i] = createDefaultLevelRecord();
   }
   return {
     badges,
@@ -101,29 +109,140 @@ function createDefaultStore(): AchievementStore {
   };
 }
 
+function migrateLevelRecord(rec: Partial<LevelRecord> & { completed: boolean }): LevelRecord {
+  const base: LevelRecord = {
+    completed: rec.completed ?? false,
+    completedAt: rec.completedAt,
+    timeSpent: rec.timeSpent ?? 0,
+    errorCount: rec.errorCount ?? 0,
+    usedHint: rec.usedHint ?? false,
+    bestTime: rec.bestTime,
+    minErrorCount: rec.minErrorCount,
+    everNoHint: rec.everNoHint,
+    everFast: rec.everFast
+  };
+
+  if (base.completed) {
+    if (base.bestTime === undefined) {
+      base.bestTime = base.timeSpent;
+    }
+    if (base.minErrorCount === undefined) {
+      base.minErrorCount = base.errorCount;
+    }
+    if (base.everNoHint === undefined) {
+      base.everNoHint = !base.usedHint;
+    }
+    if (base.everFast === undefined) {
+      base.everFast = base.bestTime <= FAST_COMPLETE_THRESHOLD;
+    }
+  }
+
+  return base;
+}
+
 export function loadAchievements(): AchievementStore {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return createDefaultStore();
-    const parsed = JSON.parse(raw) as AchievementStore;
-    const defaults = createDefaultStore();
+    const rawV2 = localStorage.getItem(STORAGE_KEY);
+    if (rawV2) {
+      const parsed = JSON.parse(rawV2) as AchievementStore;
+      return normalizeStore(parsed);
+    }
+
+    const rawV1 = localStorage.getItem('starmyth_achievements_v1');
+    if (rawV1) {
+      const parsedV1 = JSON.parse(rawV1) as {
+        badges?: Record<string, BadgeProgress>;
+        levels?: Record<number, Partial<LevelRecord> & { completed: boolean }>;
+        totalCompleted?: number;
+        firstPlayedAt?: number;
+      };
+      const migrated = migrateFromV1(parsedV1);
+      saveAchievements(migrated);
+      try {
+        localStorage.removeItem('starmyth_achievements_v1');
+      } catch {
+        // ignore
+      }
+      return migrated;
+    }
+
+    return createDefaultStore();
+  } catch (e) {
+    console.warn('加载成就数据失败，使用默认值:', e);
+    return createDefaultStore();
+  }
+}
+
+function migrateFromV1(v1: {
+  badges?: Record<string, BadgeProgress>;
+  levels?: Record<number, Partial<LevelRecord> & { completed: boolean }>;
+  totalCompleted?: number;
+  firstPlayedAt?: number;
+}): AchievementStore {
+  const store = createDefaultStore();
+
+  if (v1.badges) {
+    for (const def of BADGE_DEFINITIONS) {
+      if (v1.badges[def.id]) {
+        store.badges[def.id] = { ...store.badges[def.id], ...v1.badges[def.id] };
+      }
+    }
+  }
+
+  if (v1.levels) {
+    let completedCount = 0;
+    for (let i = 1; i <= TOTAL_LEVELS; i++) {
+      const raw = v1.levels[i];
+      if (raw) {
+        store.levels[i] = migrateLevelRecord(raw);
+        if (store.levels[i].completed) completedCount++;
+      }
+    }
+    if (v1.totalCompleted !== undefined) {
+      store.totalCompleted = v1.totalCompleted;
+    } else {
+      store.totalCompleted = completedCount;
+    }
+  }
+
+  if (v1.firstPlayedAt) {
+    store.firstPlayedAt = v1.firstPlayedAt;
+  }
+
+  return store;
+}
+
+function normalizeStore(parsed: AchievementStore): AchievementStore {
+  const defaults = createDefaultStore();
+
+  if (!parsed.badges || typeof parsed.badges !== 'object') {
+    parsed.badges = defaults.badges;
+  } else {
     for (const def of BADGE_DEFINITIONS) {
       if (!parsed.badges[def.id]) {
         parsed.badges[def.id] = defaults.badges[def.id];
       }
     }
+  }
+
+  if (!parsed.levels || typeof parsed.levels !== 'object') {
+    parsed.levels = defaults.levels;
+  } else {
     for (let i = 1; i <= TOTAL_LEVELS; i++) {
-      if (!parsed.levels[i]) {
+      const raw = parsed.levels[i];
+      if (raw && raw.completed) {
+        parsed.levels[i] = migrateLevelRecord(raw);
+      } else if (!raw) {
         parsed.levels[i] = defaults.levels[i];
       }
     }
-    if (typeof parsed.totalCompleted !== 'number') {
-      parsed.totalCompleted = 0;
-    }
-    return parsed;
-  } catch {
-    return createDefaultStore();
   }
+
+  if (typeof parsed.totalCompleted !== 'number') {
+    parsed.totalCompleted = 0;
+  }
+
+  return parsed as AchievementStore;
 }
 
 export function saveAchievements(store: AchievementStore): void {
@@ -154,6 +273,26 @@ export interface LevelCompleteResult {
   store: AchievementStore;
 }
 
+function mergeBestRecord(prev: LevelRecord, current: { timeSpent: number; errorCount: number; usedHint: boolean }): LevelRecord {
+  const merged: LevelRecord = {
+    ...prev,
+    completed: true,
+    completedAt: Date.now(),
+    timeSpent: current.timeSpent,
+    errorCount: current.errorCount,
+    usedHint: current.usedHint,
+    bestTime: prev.bestTime !== undefined
+      ? Math.min(prev.bestTime, current.timeSpent)
+      : current.timeSpent,
+    minErrorCount: prev.minErrorCount !== undefined
+      ? Math.min(prev.minErrorCount, current.errorCount)
+      : current.errorCount,
+    everNoHint: prev.everNoHint || !current.usedHint,
+    everFast: prev.everFast || current.timeSpent <= FAST_COMPLETE_THRESHOLD
+  };
+  return merged;
+}
+
 export function processLevelComplete(
   store: AchievementStore,
   levelId: number,
@@ -163,36 +302,18 @@ export function processLevelComplete(
     store.firstPlayedAt = Date.now();
   }
 
-  const prevRecord = store.levels[levelId] || {
-    completed: false,
-    timeSpent: 0,
-    errorCount: 0,
-    usedHint: false
-  };
-
+  const prevRecord = store.levels[levelId] || createDefaultLevelRecord();
   const isFirstClearThisLevel = !prevRecord.completed;
+
   if (isFirstClearThisLevel) {
     store.totalCompleted++;
   }
 
-  const newRecord: LevelRecord = {
-    completed: true,
-    completedAt: Date.now(),
-    timeSpent: stats.timeSpent,
-    errorCount: stats.errorCount,
-    usedHint: stats.usedHint,
-    bestTime: prevRecord.bestTime
-      ? Math.min(prevRecord.bestTime, stats.timeSpent)
-      : stats.timeSpent
-  };
-  store.levels[levelId] = newRecord;
+  store.levels[levelId] = mergeBestRecord(prevRecord, stats);
 
   const newUnlocks: string[] = [];
 
-  const isFirstClear = store.totalCompleted === 1 && isFirstClearThisLevel;
-  if (isFirstClear) {
-    if (unlockBadge(store, 'first_clear')) newUnlocks.push('first_clear');
-  } else if (store.totalCompleted >= 1) {
+  if (store.totalCompleted >= 1) {
     if (unlockBadge(store, 'first_clear')) newUnlocks.push('first_clear');
   }
 
@@ -209,34 +330,34 @@ export function processLevelComplete(
   }
 
   let allCompleted = true;
-  let allFlawless = true;
-  let allNoHint = true;
-  let allFast = true;
+  let allFlawlessBest = true;
+  let allNoHintEver = true;
+  let allFastEver = true;
 
   for (let i = 1; i <= TOTAL_LEVELS; i++) {
     const rec = store.levels[i];
     if (!rec || !rec.completed) {
       allCompleted = false;
-      allFlawless = false;
-      allNoHint = false;
-      allFast = false;
+      allFlawlessBest = false;
+      allNoHintEver = false;
+      allFastEver = false;
       break;
     }
-    if (rec.errorCount > 0) allFlawless = false;
-    if (rec.usedHint) allNoHint = false;
-    if ((rec.bestTime ?? rec.timeSpent) > FAST_COMPLETE_THRESHOLD) allFast = false;
+    if ((rec.minErrorCount ?? rec.errorCount) > 0) allFlawlessBest = false;
+    if (!rec.everNoHint) allNoHintEver = false;
+    if (!rec.everFast) allFastEver = false;
   }
 
   if (allCompleted) {
     if (unlockBadge(store, 'all_clear')) newUnlocks.push('all_clear');
   }
-  if (allFlawless) {
+  if (allFlawlessBest) {
     if (unlockBadge(store, 'all_flawless')) newUnlocks.push('all_flawless');
   }
-  if (allNoHint) {
+  if (allNoHintEver) {
     if (unlockBadge(store, 'all_no_hint')) newUnlocks.push('all_no_hint');
   }
-  if (allFlawless && allNoHint && allFast) {
+  if (allFlawlessBest && allNoHintEver && allFastEver) {
     if (unlockBadge(store, 'triple_crown')) newUnlocks.push('triple_crown');
   }
 
@@ -255,4 +376,8 @@ export function getUnlockedCount(store: AchievementStore): number {
 
 export function getTotalBadges(): number {
   return BADGE_DEFINITIONS.length;
+}
+
+export function getLevelRecord(store: AchievementStore, levelId: number): LevelRecord {
+  return store.levels[levelId] || createDefaultLevelRecord();
 }

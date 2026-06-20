@@ -112,6 +112,9 @@ export interface LevelRecord {
   errorCount: number;
   usedHint: boolean;
   bestTime?: number;
+  minErrorCount?: number;
+  everNoHint?: boolean;
+  everFast?: boolean;
 }
 
 export interface AchievementStore {
