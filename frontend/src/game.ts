@@ -8,6 +8,12 @@ import type {
   BackgroundStar,
   LevelData
 } from './types';
+
+export interface LevelCompleteStats {
+  timeSpent: number;
+  errorCount: number;
+  usedHint: boolean;
+}
 import { Renderer } from './renderer';
 import { getLevel, verifyEdge } from './api';
 import {
@@ -33,7 +39,11 @@ export class Game {
 
   private onLevelChange?: (level: LevelData) => void;
   private onProgressChange?: (current: number, total: number) => void;
-  private onComplete?: (desc: string) => void;
+  private onComplete?: (desc: string, stats: LevelCompleteStats) => void;
+
+  private levelStartTime: number = 0;
+  private errorCount: number = 0;
+  private usedHint: boolean = false;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -69,7 +79,7 @@ export class Game {
   setCallbacks(callbacks: {
     onLevelChange?: (level: LevelData) => void;
     onProgressChange?: (current: number, total: number) => void;
-    onComplete?: (desc: string) => void;
+    onComplete?: (desc: string, stats: LevelCompleteStats) => void;
   }): void {
     this.onLevelChange = callbacks.onLevelChange;
     this.onProgressChange = callbacks.onProgressChange;
@@ -229,6 +239,7 @@ export class Game {
           this.state.completedEdges.add(edgeKey);
           this.checkCompletion();
         } else {
+          this.errorCount++;
           setTimeout(() => {
             this.removeConnection(startId, endId);
           }, 1500);
@@ -297,8 +308,14 @@ export class Game {
       if (this.completionTimeoutId) {
         clearTimeout(this.completionTimeoutId);
       }
+      const timeSpent = (performance.now() - this.levelStartTime) / 1000;
+      const stats: LevelCompleteStats = {
+        timeSpent,
+        errorCount: this.errorCount,
+        usedHint: this.usedHint
+      };
       this.completionTimeoutId = setTimeout(() => {
-        this.onComplete?.(this.state.levelData!.creatureDescription);
+        this.onComplete?.(this.state.levelData!.creatureDescription, stats);
         this.completionTimeoutId = null;
       }, 1500);
     }
@@ -345,11 +362,18 @@ export class Game {
     this.state.isComplete = false;
     this.state.drawState = this.createEmptyDrawState();
     this.state.snapTargetId = null;
+    this.state.showFrequencies = false;
+    this.levelStartTime = performance.now();
+    this.errorCount = 0;
+    this.usedHint = false;
     this.onProgressChange?.(0, this.state.levelData?.edges.length ?? 0);
   }
 
   toggleFrequencies(): boolean {
     this.state.showFrequencies = !this.state.showFrequencies;
+    if (this.state.showFrequencies) {
+      this.usedHint = true;
+    }
     return this.state.showFrequencies;
   }
 
@@ -371,6 +395,9 @@ export class Game {
     this.state.drawState = this.createEmptyDrawState();
     this.state.snapTargetId = null;
     this.state.showFrequencies = false;
+    this.levelStartTime = performance.now();
+    this.errorCount = 0;
+    this.usedHint = false;
 
     this.onLevelChange?.(data);
     this.onProgressChange?.(0, data.edges.length);

@@ -87,3 +87,36 @@ export interface VerifyResult {
   frequencies?: Record<string, number>;
   ratio?: [number, number] | null;
 }
+
+export interface BadgeDefinition {
+  id: string;
+  name: string;
+  icon: string;
+  description: string;
+  rarity: 'common' | 'rare' | 'epic' | 'legendary';
+  hint: string;
+}
+
+export interface BadgeProgress {
+  unlocked: boolean;
+  unlockedAt?: number;
+  progress?: number;
+  total?: number;
+  levelRecords?: Record<number, LevelRecord>;
+}
+
+export interface LevelRecord {
+  completed: boolean;
+  completedAt?: number;
+  timeSpent: number;
+  errorCount: number;
+  usedHint: boolean;
+  bestTime?: number;
+}
+
+export interface AchievementStore {
+  badges: Record<string, BadgeProgress>;
+  levels: Record<number, LevelRecord>;
+  totalCompleted: number;
+  firstPlayedAt?: number;
+}
